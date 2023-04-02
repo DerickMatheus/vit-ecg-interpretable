@@ -5,7 +5,7 @@ import torch.optim as optim
 import numpy as np
 from sklearn.metrics import precision_recall_curve
 # user written
-from resnet import ResNet1d
+from bcosTransformer import BCosTransformer
 from dataloader import CODE2Dataset, BatchDataloader
 import utils
 from metrics import EcgMetrics
@@ -29,7 +29,7 @@ def train(ep, dataload):
         model.zero_grad()
 
         # Forward pass
-        model_output = model(traces)
+        model_output = model(traces[:,1,:])
         loss = loss_function(model_output, diagnoses)
 
         # Backward pass
@@ -67,7 +67,7 @@ def eval(ep, dataload, n_valid, n_classes):
         start = end
         with torch.no_grad():
             # Forward pass
-            model_output = model(traces)
+            model_output = model(traces[:,1,:])
             loss = loss_function(model_output, diagnoses)
 
             # store output
@@ -147,9 +147,6 @@ if __name__ == "__main__":
     # Check for unknown options
     if unk:
         warn("Unknown arguments:" + str(unk) + ".")
-
-    if(args.n_residual_block is not None and args.n_residual_block in [2,4,8,16]):
-        args.net_filter_size, args.net_seq_length = utils.net_param_map(args.n_residual_block)
 
     # set seed
     utils.seed_everything(args.seed)

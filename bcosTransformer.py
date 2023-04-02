@@ -4,6 +4,7 @@ import torch
 import numpy as np
 from utils import eps
 from bcosDense import BCosDense
+from bcosconv1d import BCosConv1d
 from einops import rearrange
 
 """
@@ -14,9 +15,6 @@ from einops import rearrange
             https://arxiv.org/pdf/2205.10268.pdf and
             https://arxiv.org/pdf/2301.08669.pdf
 """
-
-## attBlock(softmax(Q*K))
-##Maxout(B-cos(P,S))
 
 class BCos(nn.Module):
     def __init__(self, dim, max_out=1, b=2, scale=None,
@@ -70,12 +68,26 @@ class BCosAttention(nn.Module):
         x_= torch.matmul(ah, wvp)
         wvu = self.Wu(x_)
         out = torch.matmul(torch.matmul(wvu, x_.transpose(-2,-1)), x)
+        
+        norm = (F.avg_pool1d((out ** 2).sum(1, keepdim=True),1,1,0)
+                    + eps) ** 0.5
 
-        return out
+        return (out / norm).abs() + eps
  
 class BCosTransformer(nn.Module):
-    def __init__(self, dim, depth, heads, nclass, dim_head):
+    def __init__(self, dim, depth, heads, nclass, dim_head, kernel_size=17, n_filters_out=[8,16,32,64], seq_len=4096):
         super().__init__()
+        padding=int(np.floor((kernel_size - 1) / 2))
+        
+        self.convs = nn.ModuleList([])
+        for i in range(len(n_filters_out)-1):
+            self.convs.append(
+                BCosConv1d(n_filters_out[i], n_filters_out[i+1], kernel_size,
+                                bias=False, stride=2, padding=padding,
+                                b = 2))
+        dim_in = int(n_filters_out[-1]*(seq_len/2**(len(n_filters_out)-1)))
+        dim_out = dim - 1
+        self.embedding = BCosDense(dim_in, dim_out, b=2)
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
@@ -85,8 +97,12 @@ class BCosTransformer(nn.Module):
         self.classifier = BCosDense(dim, nclass - 1, b=2)
 
     def forward(self, x):
+        for conv_l in self.convs:
+            x = conv_l(x)
+        x = x.view(x.size(0), -1)
+        x = self.embedding(x)
         for attn, fc in self.layers:
-            x = attn(x) + x
-            x = fc(x) + x
+            x = attn(x)
+            x = fc(x)
         x = self.classifier(x)
         return x

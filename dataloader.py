@@ -4,7 +4,64 @@ import torch
 import pandas as pd
 import numpy as np
 import neurokit2 as nk
+from torch.utils.data import Dataset
 
+class CODE2Dataloader(Dataset):
+    def __init__(self, h5_file, path_to_csv, traces_dset='signal', exam_id_dset='id_exam',
+                 reg_dset='register_num', train=True):
+#         f = h5py.File(path_to_h5, 'r')
+        f = h5_file
+        df = pd.read_csv(path_to_csv)
+        csv_index = df['id_exame']
+
+        # Save missing ids
+
+        # Set index
+        df = df.set_index('id_exame')
+        # save h5 values
+        self.f = f
+        self.traces = f[traces_dset]
+        self.exam_ids = np.array(f[exam_id_dset])
+        self.csv_exam_ids = csv_index
+        self.reg = np.array(f[reg_dset])
+        self.missing_ids_in_hdf5 = ~np.isin(self.exam_ids, df.index)
+        # save csv values
+        df = df.reindex(self.exam_ids, fill_value=False, copy=True)
+        if train:
+            self.val = np.array(df['validation']) & (~self.missing_ids_in_hdf5)
+            self.train = (~self.val) & ~self.missing_ids_in_hdf5
+        else:
+            self.train = np.array(df['validation']) & (~self.missing_ids_in_hdf5)
+            
+        self.train=np.where(self.train)[0]
+        del df['validation']
+        df = df[['FA', 'BAV1o', 'BRD', 'BRE', 'Bradi', 'Taqui']]
+        df = df.set_index(self.reg, append=True)  # add register as a second index
+        df.index.names = ['id_exame', 'reg']
+        self.outcomes = df
+        self.error = 0
+        self.features = 0
+            
+    def __getitem__(self, idx):
+        new_idx = self.train[idx]
+        X=self.traces[new_idx]
+        traces = np.empty(shape = (self.traces.shape[0], 1024))
+        try:
+            segment = nk.ecg_peaks(X[0], sampling_rate=400)
+            Rpeak = segment[1]['ECG_R_Peaks'][1]
+            if Rpeak < 4096 - 1024:
+                traces = X[:,Rpeak:Rpeak+1024]
+            else:
+                traces = X[:,0:1024]
+        except:
+            traces = X[:,0:1024]
+        X=torch.tensor(traces)
+        Y=torch.tensor(self.outcomes.iloc[new_idx].values, dtype=torch.float32)
+#         Y=torch.from_numpy(self.y.loc[self.y['id_exame'] == self.exam_ids[ind]].values[:,1:-1].astype(bool)).int().squeeze()
+        return X,Y
+        
+    def __len__(self):
+        return len(self.train)
 
 class CODE2Dataset:
     def __init__(self, path_to_h5, path_to_csv, traces_dset='signal', exam_id_dset='id_exam',
@@ -54,8 +111,8 @@ class CODE2Dataset:
                 traces[i] = x[:,0:seq_size]
                 self.error += 1
 
-#         return self.traces[start:end], self.outcomes.iloc[start:end].values
         return traces, self.outcomes.iloc[start:end].values
+#         return self.traces[start:end], self.outcomes.iloc[start:end].values
 
     def get_features_batch(self, start=0, end=None):
         return self.features[start:end], self.oucomes.iloc[start:end]
